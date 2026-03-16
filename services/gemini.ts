@@ -1,8 +1,15 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Brawler, GameResult } from "../types";
 
-// NOTE: In a real production app, you would proxy this through a backend.
-// For this demo, we assume process.env.API_KEY is available.
+export type SourceLink = {
+  title: string;
+  url: string;
+};
+
+export type KnowItAllResult = {
+  answer: string;
+  sources: SourceLink[];
+};
 
 const getAI = () => {
   const apiKey = process.env.API_KEY;
@@ -13,12 +20,49 @@ const getAI = () => {
   return new GoogleGenAI({ apiKey });
 };
 
+const parseGroundingSources = (response: any): SourceLink[] => {
+  const chunks = response?.candidates?.[0]?.groundingMetadata?.groundingChunks;
+  if (!Array.isArray(chunks)) return [];
+
+  const unique = new Map<string, SourceLink>();
+
+  chunks.forEach((chunk: any) => {
+    const uri = chunk?.web?.uri;
+    if (!uri || unique.has(uri)) return;
+
+    unique.set(uri, {
+      title: chunk?.web?.title || 'Bilinmeyen kaynak',
+      url: uri,
+    });
+  });
+
+  return Array.from(unique.values());
+};
+
+export const askKnowItAll = async (question: string): Promise<KnowItAllResult> => {
+  const ai = getAI();
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: `Kullanıcının sorusuna Türkçe olarak kısa, kesin ve tek bir paragrafta cevap ver. Gereksiz açıklama yapma. Soru: ${question}`,
+    config: {
+      tools: [{ googleSearch: {} }],
+      temperature: 0.2,
+    },
+  });
+
+  return {
+    answer: response.text || 'Şu anda net bir cevap üretemedim.',
+    sources: parseGroundingSources(response),
+  };
+};
+
 export const generateBrawlerAI = async (prompt: string): Promise<Brawler | null> => {
   try {
     const ai = getAI();
     const modelId = "gemini-3-flash-preview";
-    
-    const userPrompt = `Create a Brawl Stars inspired character based on this description: "${prompt}". 
+
+    const userPrompt = `Create a Brawl Stars inspired character based on this description: "${prompt}".
     It must be balanced for a game with max health around 2000 and max damage around 300.
     Role must be one of: Tank, Sharpshooter, Support, Assassin, Controller.`;
 
@@ -81,8 +125,8 @@ export const getMatchCoaching = async (result: GameResult, brawlerName: string):
       Winner: ${result.winner.toUpperCase()} Team
       My Stats: ${result.playerKills} Kills, ${result.playerDeaths} Deaths, ${result.crystalsCollected} Crystals collected.
       Duration: ${Math.floor(result.duration / 60)}m ${result.duration % 60}s.
-      
-      Give me a short, punchy, fun coaching tip or reaction. Like a sports commentator or a tough coach. 
+
+      Give me a short, punchy, fun coaching tip or reaction. Like a sports commentator or a tough coach.
       Keep it under 3 sentences. Be enthusiastic!
     `;
 
